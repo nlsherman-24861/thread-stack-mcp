@@ -5,6 +5,7 @@
 import { glob } from 'glob';
 import { readFile, stat } from 'fs/promises';
 import { relative } from 'path';
+import matter from 'gray-matter';
 import { NoteParser } from './parser.js';
 import { Note, NoteMetadata, SearchResult } from './types.js';
 import { ZoneManager, Zone } from './zones.js';
@@ -27,6 +28,45 @@ export class ZoneScanner {
   constructor(basePath: string, parser?: NoteParser) {
     this.zones = new ZoneManager(basePath);
     this.parser = parser || new NoteParser();
+  }
+
+  /**
+   * Scan zones and return metadata only (no full content)
+   */
+  async scanZonesMetadata(zones: Zone[]): Promise<NoteMetadata[]> {
+    const metadata: NoteMetadata[] = [];
+
+    for (const zone of zones) {
+      if (zone === 'scratchpad') {
+        // Scratchpad is a single file, handle separately
+        const scratchpadPath = this.zones.getZonePath('scratchpad');
+        try {
+          const noteMetadata = await this.loadNoteMetadata(scratchpadPath);
+          metadata.push(noteMetadata);
+        } catch {
+          // Scratchpad might not exist yet, skip
+        }
+      } else {
+        // Scan directory zones
+        const zonePaths = this.zones.getZonePaths([zone]);
+
+        for (const zonePath of zonePaths) {
+          const pattern = `${zonePath}/**/*.md`;
+          const files = await glob(pattern, { windowsPathsNoEscape: true });
+
+          for (const file of files) {
+            try {
+              const noteMetadata = await this.loadNoteMetadata(file);
+              metadata.push(noteMetadata);
+            } catch (error) {
+              console.error(`Failed to load note metadata ${file}:`, error);
+            }
+          }
+        }
+      }
+    }
+
+    return metadata;
   }
 
   /**
@@ -69,6 +109,61 @@ export class ZoneScanner {
   }
 
   /**
+   * Load note metadata only (no full content parsing)
+   */
+  async loadNoteMetadata(filePath: string): Promise<NoteMetadata> {
+    const fileStats = await stat(filePath);
+    
+    // Read only first ~1000 bytes to get frontmatter + title estimation
+    const fileHandle = await readFile(filePath, 'utf-8');
+    
+    // Parse frontmatter without full content processing
+    const { data: frontmatter, content } = matter(fileHandle);
+    
+    // Get relative path
+    const relativePath = relative(this.zones.getBasePath(), filePath).replace(/\\/g, '/');
+    
+    // Extract title efficiently
+    const title = this.extractTitleFromMetadata(frontmatter, content, relativePath);
+    
+    // Extract tags from frontmatter and first part of content
+    const tags = this.extractTagsFromMetadata(frontmatter, content.substring(0, 500));
+    
+    // Estimate word count from file size (rough approximation: 1 word ≈ 5 characters)
+    const estimatedWordCount = Math.floor(fileStats.size / 5);
+    
+    // Check for actionables in first part of content
+    const contentSample = content.substring(0, 500);
+    const hasActionables = contentSample.includes('#actionable') ||
+                          /^[\s-]*\[[ xX]\]/m.test(contentSample) ||
+                          tags.includes('actionable');
+    
+    // Extract issue references from first part
+    const issuePattern = /([a-zA-Z0-9_-]+[/-][a-zA-Z0-9_-]+#\d+)|(?:^|\s)#(\d+)(?:\s|$)/g;
+    const linkedIssues: string[] = [];
+    let issueMatch;
+    const contentSample = content.substring(0, 500);
+    while ((issueMatch = issuePattern.exec(contentSample)) !== null) {
+      linkedIssues.push(issueMatch[1] || `#${issueMatch[2]}`);
+    }
+    
+    // Extract links from first part
+    const linkedNotes = this.extractLinksFromContent(content.substring(0, 500));
+    
+    return {
+      path: relativePath,
+      title,
+      tags,
+      created: frontmatter.created ? new Date(frontmatter.created) : fileStats.birthtime,
+      modified: frontmatter.modified ? new Date(frontmatter.modified) : fileStats.mtime,
+      wordCount: estimatedWordCount,
+      hasActionables,
+      linkedIssues,
+      linkedNotes
+    };
+  }
+
+  /**
    * Load a single note from file
    */
   async loadNote(filePath: string, useCache = true): Promise<Note> {
@@ -108,47 +203,61 @@ export class ZoneScanner {
   }
 
   /**
-   * Search notes across zones
+   * Search notes across zones - using two-pass approach for performance
    */
   async search(options: ZoneSearchOptions): Promise<SearchResult[]> {
     // Determine which zones to search
     const zonesToSearch = options.zones || this.zones.getDefaultSearchZones();
 
-    // Scan all zones
-    const notes = await this.scanZones(zonesToSearch);
+    // PHASE 1: Scan metadata only for initial filtering
+    const allMetadata = await this.scanZonesMetadata(zonesToSearch);
+    let filteredMetadata = allMetadata;
+
+    // Filter by date range (can be done with metadata only)
+    if (options.dateFrom) {
+      filteredMetadata = filteredMetadata.filter(note => note.created >= options.dateFrom!);
+    }
+    if (options.dateTo) {
+      filteredMetadata = filteredMetadata.filter(note => note.created <= options.dateTo!);
+    }
+
+    // Filter by tags (can be done with metadata only)
+    if (options.tags && options.tags.length > 0) {
+      filteredMetadata = filteredMetadata.filter(note => 
+        options.tags!.every(tag => note.tags.includes(tag))
+      );
+    }
+
+    // PHASE 2: For query searches, load full content only for remaining notes
     const results: SearchResult[] = [];
+    
+    if (options.query) {
+      // Load full content only for notes that passed metadata filters
+      const fullNotes = await Promise.all(
+        filteredMetadata.map(async (metadata) => {
+          const basePath = this.zones.getBasePath();
+          const fullPath = `${basePath}/${metadata.path}`;
+          return await this.loadNote(fullPath);
+        })
+      );
 
-    for (const note of notes) {
-      const metadata = this.parser.toMetadata(note);
-      let score = 0;
-      const matchedTags: string[] = [];
+      for (const note of fullNotes) {
+        let score = 0;
+        const matchedTags: string[] = [];
 
-      // Filter by date range
-      if (options.dateFrom && note.created < options.dateFrom) {
-        continue;
-      }
-      if (options.dateTo && note.created > options.dateTo) {
-        continue;
-      }
-
-      // Filter by tags
-      if (options.tags && options.tags.length > 0) {
-        const hasAllTags = options.tags.every(tag => note.tags.includes(tag));
-        if (!hasAllTags) {
-          continue;
+        // Add tag scoring
+        if (options.tags && options.tags.length > 0) {
+          matchedTags.push(...options.tags.filter(tag => note.tags.includes(tag)));
+          score += matchedTags.length * 10;
         }
-        matchedTags.push(...options.tags.filter(tag => note.tags.includes(tag)));
-        score += matchedTags.length * 10;
-      }
 
-      // Search by query
-      if (options.query) {
+        // Query matching
         const queryLower = options.query.toLowerCase();
         const titleMatch = note.title.toLowerCase().includes(queryLower);
         const contentMatch = note.content.toLowerCase().includes(queryLower);
 
         if (!titleMatch && !contentMatch) {
-          continue;
+          continue; // Skip notes without query match
         }
 
         // Score based on match location
@@ -163,19 +272,37 @@ export class ZoneScanner {
         if (note.title.toLowerCase() === queryLower) {
           score += 50;
         }
+
+        // Generate excerpt with query context
+        const excerpt = this.generateContextualExcerpt(note.content, options.query);
+        const metadata = this.parser.toMetadata(note);
+
+        results.push({
+          note: metadata,
+          excerpt,
+          score,
+          matchedTags
+        });
       }
+    } else {
+      // No query - just return filtered metadata with excerpts
+      for (const metadata of filteredMetadata) {
+        let score = 0;
+        const matchedTags: string[] = [];
 
-      // Generate excerpt with query context
-      const excerpt = options.query
-        ? this.generateContextualExcerpt(note.content, options.query)
-        : this.parser.generateExcerpt(note.content);
+        // Add tag scoring
+        if (options.tags && options.tags.length > 0) {
+          matchedTags.push(...options.tags.filter(tag => metadata.tags.includes(tag)));
+          score += matchedTags.length * 10;
+        }
 
-      results.push({
-        note: metadata,
-        excerpt,
-        score,
-        matchedTags
-      });
+        results.push({
+          note: metadata,
+          excerpt: '', // No excerpt needed for tag-only searches
+          score,
+          matchedTags
+        });
+      }
     }
 
     // Sort by score (descending) and limit results
@@ -189,7 +316,7 @@ export class ZoneScanner {
   }
 
   /**
-   * List notes by tags (zone-aware)
+   * List notes by tags (zone-aware) - using metadata-only scan
    */
   async listByTags(
     tags: string[],
@@ -198,9 +325,10 @@ export class ZoneScanner {
     zones?: Zone[]
   ): Promise<NoteMetadata[]> {
     const zonesToSearch = zones || this.zones.getDefaultSearchZones();
-    const notes = await this.scanZones(zonesToSearch);
+    // Use metadata-only scan for performance
+    const metadata = await this.scanZonesMetadata(zonesToSearch);
 
-    const filtered = notes.filter(note => {
+    const filtered = metadata.filter(note => {
       if (matchMode === 'all') {
         return tags.every(tag => note.tags.includes(tag));
       } else {
@@ -208,10 +336,8 @@ export class ZoneScanner {
       }
     });
 
-    const metadata = filtered.map(note => this.parser.toMetadata(note));
-
     // Sort
-    metadata.sort((a, b) => {
+    filtered.sort((a, b) => {
       switch (sortBy) {
         case 'created':
           return b.created.getTime() - a.created.getTime();
@@ -223,41 +349,41 @@ export class ZoneScanner {
       }
     });
 
-    return metadata;
+    return filtered;
   }
 
   /**
-   * List files in inbox for processing
+   * List files in inbox for processing - using metadata-only scan
    */
   async listInboxItems(subzone?: 'quick' | 'voice'): Promise<NoteMetadata[]> {
     const inboxZones: Zone[] = ['inbox'];
-    const notes = await this.scanZones(inboxZones);
+    // Use metadata-only scan for performance
+    const metadata = await this.scanZonesMetadata(inboxZones);
 
-    let filtered = notes;
+    let filtered = metadata;
 
     // Filter by subzone if specified
     if (subzone) {
       const subzonePath = subzone === 'quick' ? 'inbox/quick' : 'inbox/voice';
-      filtered = notes.filter(note => note.path.includes(subzonePath));
+      filtered = metadata.filter(note => note.path.includes(subzonePath));
     }
 
-    const metadata = filtered.map(note => this.parser.toMetadata(note));
-
     // Sort by created date (oldest first for processing)
-    metadata.sort((a, b) => a.created.getTime() - b.created.getTime());
+    filtered.sort((a, b) => a.created.getTime() - b.created.getTime());
 
-    return metadata;
+    return filtered;
   }
 
   /**
-   * Get all unique tags across zones
+   * Get all unique tags across zones - using metadata-only scan
    */
   async getAllTags(zones?: Zone[]): Promise<Map<string, number>> {
     const zonesToSearch = zones || this.zones.getDefaultSearchZones();
-    const notes = await this.scanZones(zonesToSearch);
+    // Use metadata-only scan for performance
+    const metadata = await this.scanZonesMetadata(zonesToSearch);
     const tagCounts = new Map<string, number>();
 
-    for (const note of notes) {
+    for (const note of metadata) {
       for (const tag of note.tags) {
         tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
       }
@@ -329,6 +455,74 @@ export class ZoneScanner {
     }
 
     return excerpt.trim();
+  }
+
+  /**
+   * Extract title from metadata efficiently
+   */
+  private extractTitleFromMetadata(frontmatter: any, content: string, filePath: string): string {
+    // Priority 1: Frontmatter title
+    if (frontmatter.title) {
+      return frontmatter.title;
+    }
+
+    // Priority 2: First H1 heading (only check first few lines)
+    const firstLines = content.split('\n').slice(0, 10).join('\n');
+    const h1Match = firstLines.match(/^#\s+(.+)$/m);
+    if (h1Match) {
+      return h1Match[1].trim();
+    }
+
+    // Priority 3: Filename (without extension and date prefix)
+    const filename = filePath.split('/').pop()?.replace(/\.md$/, '') || 'Untitled';
+    // Remove date prefix like "2025-01-20-"
+    const withoutDate = filename.replace(/^\d{4}-\d{2}-\d{2}-/, '');
+    // Convert dashes to spaces and title case
+    return withoutDate.split('-').map(word =>
+      word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
+  }
+
+  /**
+   * Extract tags from metadata efficiently
+   */
+  private extractTagsFromMetadata(frontmatter: any, contentSample: string): string[] {
+    const tags = new Set<string>();
+
+    // From frontmatter
+    if (Array.isArray(frontmatter.tags)) {
+      frontmatter.tags.forEach((tag: string) => tags.add(tag));
+    }
+
+    // From inline tags in content sample
+    const tagPattern = /#([a-zA-Z0-9_-]+)/g;
+    let tagMatch;
+    while ((tagMatch = tagPattern.exec(contentSample)) !== null) {
+      tags.add(tagMatch[1]);
+    }
+
+    return Array.from(tags);
+  }
+
+  /**
+   * Extract links from content sample efficiently
+   */
+  private extractLinksFromContent(contentSample: string): string[] {
+    const links = new Set<string>();
+
+    // Wikilinks: [[link]]
+    const wikilinks = contentSample.matchAll(/\[\[([^\]]+)\]\]/g);
+    for (const match of wikilinks) {
+      links.add(match[1]);
+    }
+
+    // Markdown links to .md files: [text](path.md)
+    const mdLinks = contentSample.matchAll(/\[([^\]]+)\]\(([^)]+\.md)\)/g);
+    for (const match of mdLinks) {
+      links.add(match[2]);
+    }
+
+    return Array.from(links);
   }
 
   /**
