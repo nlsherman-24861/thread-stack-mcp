@@ -1,8 +1,4 @@
-# Thread-Stack MCP - Project Configuration
-
-This file contains project-specific context for Claude when working on thread-stack-mcp issues.
-
-**Global preferences** are inherited from `~/.claude/CLAUDE.md` (JAX personality, communication style, etc.)
+# Thread-Stack MCP - Claude Configuration
 
 ## Project Overview
 
