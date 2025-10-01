@@ -1,0 +1,85 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    steps:
+      # Check if we should run based on @claude mentions (outside code blocks)
+      - name: Check if review should be triggered
+        id: should_run
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Helper function to check @claude outside code blocks
+            function hasClaudeMentionOutsideCode(text) {
+              if (!text) return false;
+              if (!text.includes('@claude')) return false;
+              
+              let cleaned = text;
+              // Remove code blocks
+              cleaned = cleaned.replace(/```[\s\S]*?```/g, '');
+              // Remove inline code
+              cleaned = cleaned.replace(/`[^`]*`/g, '');
+              // Remove HTML code/pre tags
+              cleaned = cleaned.replace(/<code>[\s\S]*?<\/code>/gi, '');
+              cleaned = cleaned.replace(/<pre>[\s\S]*?<\/pre>/gi, '');
+              
+              return cleaned.includes('@claude');
+            }
+
+            const { eventName, payload } = context;
+            let shouldRun = false;
+
+            // Only trigger on @claude mentions in comments/reviews, not PR descriptions
+            if (eventName === 'pull_request_review') {
+              shouldRun = hasClaudeMentionOutsideCode(payload.review.body);
+              console.log(`PR review trigger: ${shouldRun}`);
+            }
+            else if (eventName === 'pull_request_review_comment') {
+              shouldRun = hasClaudeMentionOutsideCode(payload.comment.body);
+              console.log(`PR review comment trigger: ${shouldRun}`);
+            }
+            // For PR opened/updated, only run if explicitly requested via comment
+            // (Don't auto-review every PR)
+            else {
+              console.log(`PR opened/updated - skipping automatic review`);
+              shouldRun = false;
+            }
+
+            console.log(`Final decision: ${shouldRun ? 'RUN' : 'SKIP'}`);
+            return shouldRun;
+          result-encoding: string
+
+      - name: Checkout repository
+        if: steps.should_run.outputs.result == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code Review
+        if: steps.should_run.outputs.result == 'true'
+        uses: anthropics/claude-code-action@beta
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          custom_instructions: |
+            Focus on:
+            - Security vulnerabilities
+            - Performance issues
+            - Code quality and maintainability
+            - Test coverage
+            - Best practices
