@@ -142,7 +142,6 @@ export class ZoneScanner {
     const issuePattern = /([a-zA-Z0-9_-]+[/-][a-zA-Z0-9_-]+#\d+)|(?:^|\s)#(\d+)(?:\s|$)/g;
     const linkedIssues: string[] = [];
     let issueMatch;
-    const contentSample = content.substring(0, 500);
     while ((issueMatch = issuePattern.exec(contentSample)) !== null) {
       linkedIssues.push(issueMatch[1] || `#${issueMatch[2]}`);
     }

@@ -161,7 +161,7 @@ describe('Performance Benchmarks', () => {
       New approach (metadata): ${newTime}ms (${newResults.length} results)
       Improvement: ${(oldTime / newTime).toFixed(1)}x faster`);
 
-    await perf.addTiming('tag-filtering-comparison', newTime, {
+    perf.record('tag-filtering-comparison', newTime, {
       oldTime,
       newTime,
       improvement: oldTime / newTime,
@@ -326,7 +326,7 @@ describe('Scaling Benchmarks', () => {
           Metadata scan: ${metadataTime}ms (${metadata.length} metadata)
           Improvement: ${improvement.toFixed(1)}x faster`);
 
-        await perf.addTiming(`${size}-scan-comparison`, metadataTime, {
+        perf.record(`${size}-scan-comparison`, metadataTime, {
           fullScanTime,
           metadataTime,
           improvement,
