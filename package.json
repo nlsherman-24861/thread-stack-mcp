@@ -15,6 +15,7 @@
     "test:watch": "jest --watch",
     "test:bench": "jest --testPathPattern=benchmark.test.ts --runInBand",
     "benchmark": "tsc && node dist/scripts/benchmark.js",
+    "rebuild-index": "tsc && node -e \"const { IndexManager } = require('./dist/index-manager.js'); const path = process.env.THREAD_STACK_PATH || '.'; const mgr = new IndexManager(path); mgr.rebuild().then(() => console.log('Index rebuilt successfully')).catch(console.error);\"",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix"
   },

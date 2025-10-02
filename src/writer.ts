@@ -5,12 +5,16 @@
 import { appendFile, writeFile, readFile, mkdir } from 'fs/promises';
 import { dirname, basename } from 'path';
 import { ZoneManager } from './zones.js';
+import { IndexManager } from './index-manager.js';
+import { NoteParser } from './parser.js';
 
 export class ContentWriter {
   private zones: ZoneManager;
+  private indexManager: IndexManager;
 
-  constructor(zones: ZoneManager) {
+  constructor(zones: ZoneManager, indexManager?: IndexManager) {
     this.zones = zones;
+    this.indexManager = indexManager || new IndexManager(zones.getBasePath(), new NoteParser());
   }
 
   /**
@@ -36,6 +40,10 @@ export class ContentWriter {
     const entry = `\n## ${timeStr}\n\n${content.trim()}\n`;
 
     await appendFile(scratchpadPath, entry, 'utf-8');
+
+    // Update index
+    const relativePath = this.zones.getRelativePath(scratchpadPath);
+    await this.indexManager.update(relativePath);
 
     return {
       path: scratchpadPath,
@@ -65,6 +73,10 @@ export class ContentWriter {
     const scratchpadPath = this.zones.getZonePath('scratchpad');
     const header = '# Scratchpad\n\nYour thought incubator. Write anything. Delete everything. No structure required.\n\n---\n';
     await writeFile(scratchpadPath, header, 'utf-8');
+    
+    // Update index
+    const relativePath = this.zones.getRelativePath(scratchpadPath);
+    await this.indexManager.update(relativePath);
   }
 
   /**
@@ -83,6 +95,10 @@ export class ContentWriter {
     const markdown = `# ${title}\n\n${content.trim()}\n`;
 
     await writeFile(filename, markdown, 'utf-8');
+
+    // Update index
+    const relativePath = this.zones.getRelativePath(filename);
+    await this.indexManager.update(relativePath);
 
     return {
       path: filename,
@@ -148,6 +164,10 @@ export class ContentWriter {
 
     await writeFile(filename, markdown, 'utf-8');
 
+    // Update index
+    const relativePath = this.zones.getRelativePath(filename);
+    await this.indexManager.update(relativePath);
+
     return {
       path: filename,
       filename: basename(filename)
@@ -192,6 +212,10 @@ export class ContentWriter {
     // Append entry
     const entry = `## ${timeStr}\n\n${content.trim()}\n\n`;
     await appendFile(filename, entry, 'utf-8');
+
+    // Update index
+    const relativePath = this.zones.getRelativePath(filename);
+    await this.indexManager.update(relativePath);
 
     return {
       path: filename,
@@ -277,6 +301,10 @@ export class ContentWriter {
 
     await writeFile(path, markdown, 'utf-8');
 
+    // Update index
+    const relativePath = this.zones.getRelativePath(path);
+    await this.indexManager.update(relativePath);
+
     return { path, filename };
   }
 
@@ -320,5 +348,9 @@ export class ContentWriter {
     }
 
     await writeFile(notePath, existingContent, 'utf-8');
+
+    // Update index
+    const relativePath = this.zones.getRelativePath(notePath);
+    await this.indexManager.update(relativePath);
   }
 }
