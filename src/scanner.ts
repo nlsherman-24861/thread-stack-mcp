@@ -21,6 +21,42 @@ export interface ZoneSearchOptions {
   limit?: number;
 }
 
+interface ScoringWeights {
+  exactTitleMatch: number;      // 200 (up from current ~50)
+  titleWordMatch: number;       // 50 (new - partial title matches)
+  exactTagMatch: number;        // 20 (up from 10)
+  contentFirstParagraph: number; // 5 (new - intro matters more)
+  contentMatch: number;         // 1 (basic content matches)
+  recencyBoost: number;         // 0-10 based on age (new)
+  zoneBoost: {
+    notes: number;              // 5 (permanent knowledge)
+    daily: number;              // 3 (journal entries)
+    inbox: number;              // 1 (drafts)
+    archive: number;            // 0 (historical)
+    scratchpad: number;         // 2 (working notes)
+    maps: number;               // 4 (curated entry points)
+  };
+}
+
+const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
+  exactTitleMatch: 200,
+  titleWordMatch: 50,
+  exactTagMatch: 20,
+  contentFirstParagraph: 5,
+  contentMatch: 1,
+  recencyBoost: 10, // Max boost for very recent notes
+  zoneBoost: {
+    notes: 5,
+    daily: 3,
+    inbox: 1,
+    archive: 0,
+    scratchpad: 2,
+    maps: 4
+  }
+};
+
+const CONFIDENCE_THRESHOLD = 25; // Early exit when we have enough high-scoring results
+
 export class ZoneScanner {
   private zones: ZoneManager;
   private parser: NoteParser;
@@ -169,7 +205,7 @@ export class ZoneScanner {
   }
 
   /**
-   * Search notes across zones - using two-pass approach for performance
+   * Search notes across zones - using smart ranking with early termination
    */
   async search(options: ZoneSearchOptions): Promise<SearchResult[]> {
     // Determine which zones to search
@@ -194,84 +230,66 @@ export class ZoneScanner {
       );
     }
 
-    // PHASE 2: For query searches, load full content only for remaining notes
+    // PHASE 2: Smart ranking with early termination
     const results: SearchResult[] = [];
     
     if (options.query) {
-      // Load full content only for notes that passed metadata filters
-      const fullNotes = await Promise.all(
-        filteredMetadata.map(async (metadata) => {
-          const basePath = this.zones.getBasePath();
-          const fullPath = `${basePath}/${metadata.path}`;
-          return await this.loadNote(fullPath);
-        })
-      );
+      // Pre-filter and sort candidates by expected relevance
+      const candidates = this.preFilterCandidates(filteredMetadata, options);
+      const sortedCandidates = this.sortByExpectedRelevance(candidates, options);
 
-      for (const note of fullNotes) {
-        let score = 0;
-        const matchedTags: string[] = [];
+      const limit = options.limit || 20;
+      let processedCount = 0;
 
-        // Add tag scoring
-        if (options.tags && options.tags.length > 0) {
-          matchedTags.push(...options.tags.filter(tag => note.tags.includes(tag)));
-          score += matchedTags.length * 10;
+      // Process high-probability candidates first with early termination
+      for (const candidate of sortedCandidates) {
+        const basePath = this.zones.getBasePath();
+        const fullPath = `${basePath}/${candidate.path}`;
+        const note = await this.loadNote(fullPath);
+        
+        const scoreResult = this.scoreNoteEnhanced(note, options);
+        processedCount++;
+        
+        if (scoreResult.score > 0) {
+          const excerpt = this.generateContextualExcerpt(note.content, options.query);
+          const metadata = this.parser.toMetadata(note);
+
+          results.push({
+            note: metadata,
+            excerpt,
+            score: scoreResult.score,
+            matchedTags: scoreResult.matchedTags
+          });
+
+          // Sort results as we go to maintain top-N
+          results.sort((a, b) => b.score - a.score);
+
+          // Early exit if we have enough high-scoring results
+          if (results.length >= limit && results[limit - 1].score >= CONFIDENCE_THRESHOLD) {
+            break;
+          }
         }
 
-        // Query matching
-        const queryLower = options.query.toLowerCase();
-        const titleMatch = note.title.toLowerCase().includes(queryLower);
-        const contentMatch = note.content.toLowerCase().includes(queryLower);
-
-        if (!titleMatch && !contentMatch) {
-          continue; // Skip notes without query match
+        // Also exit if we've processed enough candidates regardless of score threshold
+        if (processedCount >= Math.min(sortedCandidates.length, limit * 3)) {
+          break;
         }
-
-        // Score based on match location
-        if (titleMatch) {
-          score += 20;
-        }
-        if (contentMatch) {
-          score += 10;
-        }
-
-        // Boost score for exact matches
-        if (note.title.toLowerCase() === queryLower) {
-          score += 50;
-        }
-
-        // Generate excerpt with query context
-        const excerpt = this.generateContextualExcerpt(note.content, options.query);
-        const metadata = this.parser.toMetadata(note);
-
-        results.push({
-          note: metadata,
-          excerpt,
-          score,
-          matchedTags
-        });
       }
     } else {
-      // No query - just return filtered metadata with excerpts
+      // No query - just return filtered metadata with enhanced tag scoring
       for (const metadata of filteredMetadata) {
-        let score = 0;
-        const matchedTags: string[] = [];
-
-        // Add tag scoring
-        if (options.tags && options.tags.length > 0) {
-          matchedTags.push(...options.tags.filter(tag => metadata.tags.includes(tag)));
-          score += matchedTags.length * 10;
-        }
+        const scoreResult = this.scoreMetadataOnly(metadata, options);
 
         results.push({
           note: metadata,
           excerpt: '', // No excerpt needed for tag-only searches
-          score,
-          matchedTags
+          score: scoreResult.score,
+          matchedTags: scoreResult.matchedTags
         });
       }
     }
 
-    // Sort by score (descending) and limit results
+    // Final sort and limit
     results.sort((a, b) => b.score - a.score);
 
     if (options.limit) {
@@ -554,6 +572,181 @@ export class ZoneScanner {
     }
 
     return actionables;
+  }
+
+  /**
+   * Pre-filter candidates using metadata to optimize search order
+   */
+  private preFilterCandidates(metadata: NoteMetadata[], options: ZoneSearchOptions): NoteMetadata[] {
+    if (!options.query) return metadata;
+
+    const queryLower = options.query.toLowerCase();
+    
+    // Filter to notes likely to have matches based on title/tags
+    return metadata.filter(note => {
+      const titleMatch = note.title.toLowerCase().includes(queryLower);
+      const tagMatch = note.tags.some(tag => tag.toLowerCase().includes(queryLower));
+      
+      // Keep if title/tag match - don't include all notes from high-value zones
+      return titleMatch || tagMatch;
+    });
+  }
+
+  /**
+   * Sort candidates by expected relevance using metadata only
+   */
+  private sortByExpectedRelevance(candidates: NoteMetadata[], options: ZoneSearchOptions): NoteMetadata[] {
+    if (!options.query) return candidates;
+
+    const queryLower = options.query.toLowerCase();
+    
+    return candidates.sort((a, b) => {
+      let scoreA = 0;
+      let scoreB = 0;
+
+      // Zone priority (notes > daily > inbox > archive)
+      const zoneA = this.getZoneFromPath(a.path);
+      const zoneB = this.getZoneFromPath(b.path);
+      scoreA += DEFAULT_SCORING_WEIGHTS.zoneBoost[zoneA as keyof typeof DEFAULT_SCORING_WEIGHTS.zoneBoost] || 0;
+      scoreB += DEFAULT_SCORING_WEIGHTS.zoneBoost[zoneB as keyof typeof DEFAULT_SCORING_WEIGHTS.zoneBoost] || 0;
+
+      // Title match scoring
+      const titleMatchA = a.title.toLowerCase().includes(queryLower);
+      const titleMatchB = b.title.toLowerCase().includes(queryLower);
+      if (titleMatchA) scoreA += 100;
+      if (titleMatchB) scoreB += 100;
+
+      // Exact title match boost
+      if (a.title.toLowerCase() === queryLower) scoreA += 200;
+      if (b.title.toLowerCase() === queryLower) scoreB += 200;
+
+      // Tag match scoring
+      const tagMatchA = a.tags.some(tag => tag.toLowerCase().includes(queryLower));
+      const tagMatchB = b.tags.some(tag => tag.toLowerCase().includes(queryLower));
+      if (tagMatchA) scoreA += 50;
+      if (tagMatchB) scoreB += 50;
+
+      // Recency boost (metadata only)
+      const ageA = Date.now() - a.modified.getTime();
+      const ageB = Date.now() - b.modified.getTime();
+      const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+      scoreA += Math.max(0, DEFAULT_SCORING_WEIGHTS.recencyBoost * (1 - ageA / maxAge));
+      scoreB += Math.max(0, DEFAULT_SCORING_WEIGHTS.recencyBoost * (1 - ageB / maxAge));
+
+      return scoreB - scoreA;
+    });
+  }
+
+  /**
+   * Enhanced scoring algorithm for full notes
+   */
+  private scoreNoteEnhanced(note: Note, options: ZoneSearchOptions): { score: number; matchedTags: string[] } {
+    let score = 0;
+    const matchedTags: string[] = [];
+    
+    if (!options.query) {
+      return { score: 0, matchedTags };
+    }
+
+    const queryLower = options.query.toLowerCase();
+    const weights = DEFAULT_SCORING_WEIGHTS;
+
+    // Tag scoring (enhanced)
+    if (options.tags && options.tags.length > 0) {
+      const exactTagMatches = options.tags.filter(tag => note.tags.includes(tag));
+      matchedTags.push(...exactTagMatches);
+      score += exactTagMatches.length * weights.exactTagMatch;
+    }
+
+    // Query matching in title
+    const titleLower = note.title.toLowerCase();
+    if (titleLower === queryLower) {
+      // Exact title match
+      score += weights.exactTitleMatch;
+    } else if (titleLower.includes(queryLower)) {
+      // Check if it's a word match vs substring
+      const titleWords = titleLower.split(/\s+/);
+      const queryWords = queryLower.split(/\s+/);
+      const wordMatches = queryWords.filter(qw => titleWords.includes(qw));
+      if (wordMatches.length > 0) {
+        score += wordMatches.length * weights.titleWordMatch;
+      } else {
+        // Substring match
+        score += weights.titleWordMatch / 2;
+      }
+    }
+
+    // Query matching in content
+    const contentLower = note.content.toLowerCase();
+    if (contentLower.includes(queryLower)) {
+      // Count occurrences
+      const occurrences = (contentLower.match(new RegExp(queryLower, 'g')) || []).length;
+      
+      // First paragraph gets higher weight
+      const firstParagraph = note.content.split('\n\n')[0]?.toLowerCase() || '';
+      const firstParagraphMatches = (firstParagraph.match(new RegExp(queryLower, 'g')) || []).length;
+      
+      score += firstParagraphMatches * weights.contentFirstParagraph;
+      score += (occurrences - firstParagraphMatches) * weights.contentMatch;
+    }
+
+    // Zone boost
+    const zone = this.getZoneFromPath(note.path);
+    score += weights.zoneBoost[zone as keyof typeof weights.zoneBoost] || 0;
+
+    // Recency boost
+    const age = Date.now() - note.modified.getTime();
+    const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+    const recencyMultiplier = Math.max(0, 1 - age / maxAge);
+    score += weights.recencyBoost * recencyMultiplier;
+
+    return { score, matchedTags };
+  }
+
+  /**
+   * Score metadata-only for tag searches
+   */
+  private scoreMetadataOnly(metadata: NoteMetadata, options: ZoneSearchOptions): { score: number; matchedTags: string[] } {
+    let score = 0;
+    const matchedTags: string[] = [];
+
+    // Tag scoring
+    if (options.tags && options.tags.length > 0) {
+      const exactTagMatches = options.tags.filter(tag => metadata.tags.includes(tag));
+      matchedTags.push(...exactTagMatches);
+      score += exactTagMatches.length * DEFAULT_SCORING_WEIGHTS.exactTagMatch;
+    }
+
+    // Zone boost
+    const zone = this.getZoneFromPath(metadata.path);
+    score += DEFAULT_SCORING_WEIGHTS.zoneBoost[zone as keyof typeof DEFAULT_SCORING_WEIGHTS.zoneBoost] || 0;
+
+    // Recency boost
+    const age = Date.now() - metadata.modified.getTime();
+    const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+    const recencyMultiplier = Math.max(0, 1 - age / maxAge);
+    score += DEFAULT_SCORING_WEIGHTS.recencyBoost * recencyMultiplier;
+
+    return { score, matchedTags };
+  }
+
+  /**
+   * Extract zone from file path
+   */
+  private getZoneFromPath(path: string): Zone {
+    const pathParts = path.split('/');
+    const firstPart = pathParts[0];
+    
+    // Map path prefixes to zones
+    if (firstPart === 'notes') return 'notes';
+    if (firstPart === 'daily') return 'daily';
+    if (firstPart === 'inbox') return 'inbox';
+    if (firstPart === 'archive') return 'archive';
+    if (firstPart === 'maps') return 'maps';
+    if (path.includes('scratchpad')) return 'scratchpad';
+    
+    // Default to notes if unclear
+    return 'notes';
   }
 
   /**
