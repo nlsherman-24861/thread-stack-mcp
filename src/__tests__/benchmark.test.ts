@@ -127,6 +127,48 @@ describe('Performance Benchmarks', () => {
     );
   }, 30000);
 
+  test('benchmark: scanZonesMetadata (metadata-only scan)', async () => {
+    scanner.clearCache();
+
+    await perf.timeAsync(
+      'scanZonesMetadata',
+      async () => {
+        const metadata = await scanner.scanZonesMetadata(['notes', 'daily']);
+        return metadata;
+      },
+      { zones: ['notes', 'daily'], operation: 'metadata-only' }
+    );
+  }, 30000);
+
+  test('benchmark: listByTags vs scanZonesMetadata performance', async () => {
+    scanner.clearCache();
+
+    // Benchmark old approach (for comparison)
+    const startOld = Date.now();
+    const oldResults = await scanner.scanZones(['notes', 'daily']);
+    const filteredOld = oldResults.filter(note => note.tags.includes('project'));
+    const oldTime = Date.now() - startOld;
+    
+    scanner.clearCache();
+
+    // Benchmark new metadata approach
+    const startNew = Date.now();
+    const newResults = await scanner.listByTags(['project'], 'any', 'modified', ['notes', 'daily']);
+    const newTime = Date.now() - startNew;
+
+    console.log(`Tag filtering comparison:
+      Old approach (full scan): ${oldTime}ms (${filteredOld.length} results)
+      New approach (metadata): ${newTime}ms (${newResults.length} results)
+      Improvement: ${(oldTime / newTime).toFixed(1)}x faster`);
+
+    perf.record('tag-filtering-comparison', newTime, {
+      oldTime,
+      newTime,
+      improvement: oldTime / newTime,
+      resultCount: newResults.length
+    });
+  }, 30000);
+
   test('benchmark: get actionable items', async () => {
     scanner.clearCache();
 
@@ -260,6 +302,39 @@ describe('Scaling Benchmarks', () => {
             return tags;
           }
         );
+      }, 60000);
+
+      test(`metadata-only scan vs full scan comparison (${size})`, async () => {
+        scanner.clearCache();
+
+        // Full scan
+        const fullScanStart = Date.now();
+        const fullNotes = await scanner.scanZones(['notes', 'inbox', 'daily']);
+        const fullScanTime = Date.now() - fullScanStart;
+        
+        scanner.clearCache();
+
+        // Metadata-only scan
+        const metadataStart = Date.now();
+        const metadata = await scanner.scanZonesMetadata(['notes', 'inbox', 'daily']);
+        const metadataTime = Date.now() - metadataStart;
+
+        const improvement = fullScanTime / metadataTime;
+        
+        console.log(`${size} corpus scan comparison:
+          Full scan: ${fullScanTime}ms (${fullNotes.length} notes)
+          Metadata scan: ${metadataTime}ms (${metadata.length} metadata)
+          Improvement: ${improvement.toFixed(1)}x faster`);
+
+        perf.record(`${size}-scan-comparison`, metadataTime, {
+          fullScanTime,
+          metadataTime,
+          improvement,
+          noteCount: fullNotes.length
+        });
+
+        // Verify we get the same number of items
+        expect(metadata.length).toBe(fullNotes.length);
       }, 60000);
     });
   }
