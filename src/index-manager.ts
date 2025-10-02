@@ -237,7 +237,9 @@ export class IndexManager {
 
     // Add updated entry
     try {
-      const fullPath = join(this.zones.getBasePath(), notePath);
+      // Check if notePath is already absolute by checking if it contains the base path
+      const basePath = this.zones.getBasePath();
+      const fullPath = notePath.includes(basePath) ? notePath : join(basePath, notePath);
       await this.addNoteToIndex(this.index, fullPath);
       await this.save();
     } catch (error) {

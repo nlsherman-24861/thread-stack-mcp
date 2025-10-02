@@ -193,7 +193,20 @@ export class ZoneManager {
    * Get relative path from absolute path
    */
   getRelativePath(absolutePath: string): string {
-    return absolutePath.replace(this.structure.basePath + '/', '').replace(/\\/g, '/');
+    // Normalize both paths to use forward slashes for consistent comparison
+    const normalizedAbsolutePath = absolutePath.replace(/\\/g, '/');
+    const normalizedBasePath = this.structure.basePath.replace(/\\/g, '/');
+    
+    // Remove base path from absolute path, handling various separator combinations
+    if (normalizedAbsolutePath.startsWith(normalizedBasePath + '/')) {
+      return normalizedAbsolutePath.substring(normalizedBasePath.length + 1);
+    } else if (normalizedAbsolutePath.startsWith(normalizedBasePath)) {
+      // Handle case where base path doesn't end with separator
+      return normalizedAbsolutePath.substring(normalizedBasePath.length).replace(/^[\/\\]+/, '');
+    }
+    
+    // If path doesn't contain base path, return as-is (might already be relative)
+    return normalizedAbsolutePath;
   }
 
   /**
