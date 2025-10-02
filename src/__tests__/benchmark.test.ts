@@ -169,11 +169,11 @@ describe('Performance Benchmarks', () => {
     });
   }, 30000);
 
-  test('benchmark: get actionable items', async () => {
+  test('benchmark: get actionable items (original)', async () => {
     scanner.clearCache();
 
     await perf.timeAsync(
-      'getActionableItems',
+      'getActionableItems-original',
       async () => {
         const notes = await scanner.scanZones(['notes', 'daily']);
         const parser = new NoteParser();
@@ -187,6 +187,61 @@ describe('Performance Benchmarks', () => {
         return actionables;
       }
     );
+  }, 30000);
+
+  test('benchmark: get actionable items (optimized Phase 3a)', async () => {
+    scanner.clearCache();
+
+    await perf.timeAsync(
+      'getActionableItems-optimized',
+      async () => {
+        const actionables = await scanner.extractActionablesOptimized(['notes', 'daily']);
+        return actionables;
+      }
+    );
+  }, 30000);
+
+  test('benchmark: actionable extraction performance comparison', async () => {
+    scanner.clearCache();
+
+    // Benchmark original approach
+    const startOriginal = Date.now();
+    const notes = await scanner.scanZones(['notes', 'daily']);
+    const parser = new NoteParser();
+    let originalActionables: any[] = [];
+    for (const note of notes) {
+      const noteActionables = parser.extractActionables(note);
+      originalActionables.push(...noteActionables);
+    }
+    const originalTime = Date.now() - startOriginal;
+    
+    scanner.clearCache();
+
+    // Benchmark optimized approach
+    const startOptimized = Date.now();
+    const optimizedActionables = await scanner.extractActionablesOptimized(['notes', 'daily']);
+    const optimizedTime = Date.now() - startOptimized;
+
+    const improvement = originalTime / optimizedTime;
+
+    console.log(`Actionable extraction comparison:
+      Original approach (scan all notes): ${originalTime}ms (${originalActionables.length} actionables)
+      Optimized approach (filtered): ${optimizedTime}ms (${optimizedActionables.length} actionables)
+      Improvement: ${improvement.toFixed(1)}x faster`);
+
+    perf.record('actionable-extraction-comparison', optimizedTime, {
+      originalTime,
+      optimizedTime,
+      improvement,
+      originalActionables: originalActionables.length,
+      optimizedActionables: optimizedActionables.length
+    });
+
+    // Verify we get the same actionables
+    expect(optimizedActionables.length).toBe(originalActionables.length);
+    
+    // Target: ≥2.5x speedup (Phase 3a goal)
+    expect(improvement).toBeGreaterThanOrEqual(2.5);
   }, 30000);
 
   test('benchmark: findRelated', async () => {

@@ -242,7 +242,7 @@ export class NoteParser {
     }
 
     // Check for task checkboxes: - [ ] or - [x]
-    if (/^[\s-]*\[[ xX]\]/.test(text)) {
+    if (text.includes('- [ ]') || text.includes('- [x]') || text.includes('- [X]')) {
       return true;
     }
 
