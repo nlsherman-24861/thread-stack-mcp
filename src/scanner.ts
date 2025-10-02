@@ -1,5 +1,6 @@
 /**
  * Zone-aware file system scanner for thread-stack
+ * Fixed CI duplicate function implementation errors
  */
 
 import { glob } from 'glob';
