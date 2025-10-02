@@ -33,7 +33,8 @@ if (!THREAD_STACK_PATH) {
 // Initialize components
 const parser = new NoteParser();
 const scanner = new ZoneScanner(THREAD_STACK_PATH, parser);
-const writer = new ContentWriter(scanner.getZoneManager());
+const indexManager = scanner.getIndexManager();
+const writer = new ContentWriter(scanner.getZoneManager(), indexManager);
 const git = new GitIntegration(THREAD_STACK_PATH);
 
 // Define tools (organized by zone)
@@ -502,7 +503,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'list_inbox_items': {
-        const items = await scanner.listInboxItems(args.subzone as 'quick' | 'voice' | undefined);
+        const items = await scanner.listInboxItemsOptimized(args.subzone as 'quick' | 'voice' | undefined);
         return {
           content: [{
             type: 'text',
@@ -700,7 +701,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'list_notes_by_tag': {
         const zones = args.zones as Zone[] | undefined;
-        const notes = await scanner.listByTags(
+        const notes = await scanner.listByTagsOptimized(
           args.tags as string[],
           (args.match_mode as 'any' | 'all') || 'any',
           (args.sort_by as 'created' | 'modified' | 'title') || 'modified',
@@ -765,7 +766,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // === METADATA ===
       case 'get_all_tags': {
         const zones = args.zones as Zone[] | undefined;
-        const tagCounts = await scanner.getAllTags(zones);
+        const tagCounts = await scanner.getAllTagsOptimized(zones);
         const sortedTags = Array.from(tagCounts.entries())
           .sort((a, b) => b[1] - a[1])
           .map(([tag, count]) => ({ tag, count }));

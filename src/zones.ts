@@ -190,6 +190,13 @@ export class ZoneManager {
   }
 
   /**
+   * Get relative path from absolute path
+   */
+  getRelativePath(absolutePath: string): string {
+    return absolutePath.replace(this.structure.basePath + '/', '').replace(/\\/g, '/');
+  }
+
+  /**
    * Generate filename for daily entry
    */
   getDailyFilename(date?: Date): string {

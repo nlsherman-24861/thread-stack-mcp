@@ -9,6 +9,7 @@ import matter from 'gray-matter';
 import { NoteParser } from './parser.js';
 import { Note, NoteMetadata, SearchResult } from './types.js';
 import { ZoneManager, Zone } from './zones.js';
+import { IndexManager } from './index-manager.js';
 
 export interface ZoneSearchOptions {
   query?: string;
@@ -24,10 +25,12 @@ export class ZoneScanner {
   private parser: NoteParser;
   private cache: Map<string, Note> = new Map();
   private cacheTimestamps: Map<string, number> = new Map();
+  private indexManager: IndexManager;
 
   constructor(basePath: string, parser?: NoteParser) {
     this.zones = new ZoneManager(basePath);
     this.parser = parser || new NoteParser();
+    this.indexManager = new IndexManager(basePath, this.parser);
   }
 
   /**
@@ -425,6 +428,139 @@ export class ZoneScanner {
    */
   getZoneManager(): ZoneManager {
     return this.zones;
+  }
+
+  /**
+   * Get index manager (for direct access to index operations)
+   */
+  getIndexManager(): IndexManager {
+    return this.indexManager;
+  }
+
+  /**
+   * Scan zones metadata using index (O(1) performance)
+   */
+  async scanZonesMetadata(zones: Zone[]): Promise<NoteMetadata[]> {
+    // Check if index is stale and rebuild if needed
+    if (await this.indexManager.isStale()) {
+      console.error('[index] Rebuilding stale index...');
+      await this.indexManager.rebuild();
+    }
+
+    return await this.indexManager.query({ zones });
+  }
+
+  /**
+   * List notes by tags using index (optimized)
+   */
+  async listByTagsOptimized(
+    tags: string[],
+    matchMode: 'any' | 'all' = 'any',
+    sortBy: 'created' | 'modified' | 'title' = 'modified',
+    zones?: Zone[]
+  ): Promise<NoteMetadata[]> {
+    // Check if index is stale and rebuild if needed
+    if (await this.indexManager.isStale()) {
+      console.error('[index] Rebuilding stale index...');
+      await this.indexManager.rebuild();
+    }
+
+    const zonesToSearch = zones || this.zones.getDefaultSearchZones();
+    
+    if (matchMode === 'all') {
+      // For 'all' mode, use index query with all tags
+      return await this.indexManager.query({ 
+        zones: zonesToSearch, 
+        tags 
+      });
+    } else {
+      // For 'any' mode, query each tag separately and merge results
+      const allResults: NoteMetadata[] = [];
+      const seenPaths = new Set<string>();
+
+      for (const tag of tags) {
+        const tagResults = await this.indexManager.query({ 
+          zones: zonesToSearch, 
+          tags: [tag] 
+        });
+        
+        for (const result of tagResults) {
+          if (!seenPaths.has(result.path)) {
+            seenPaths.add(result.path);
+            allResults.push(result);
+          }
+        }
+      }
+
+      // Sort results
+      allResults.sort((a, b) => {
+        switch (sortBy) {
+          case 'created':
+            return b.created.getTime() - a.created.getTime();
+          case 'title':
+            return a.title.localeCompare(b.title);
+          case 'modified':
+          default:
+            return b.modified.getTime() - a.modified.getTime();
+        }
+      });
+
+      return allResults;
+    }
+  }
+
+  /**
+   * Get all tags using index (optimized)
+   */
+  async getAllTagsOptimized(zones?: Zone[]): Promise<Map<string, number>> {
+    // Check if index is stale and rebuild if needed
+    if (await this.indexManager.isStale()) {
+      console.error('[index] Rebuilding stale index...');
+      await this.indexManager.rebuild();
+    }
+
+    if (!zones) {
+      // Return all tags from index
+      return await this.indexManager.getAllTags();
+    } else {
+      // Filter by zones
+      const metadata = await this.indexManager.query({ zones });
+      const tagCounts = new Map<string, number>();
+
+      for (const note of metadata) {
+        for (const tag of note.tags) {
+          tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+        }
+      }
+
+      return tagCounts;
+    }
+  }
+
+  /**
+   * List inbox items using index (optimized)
+   */
+  async listInboxItemsOptimized(subzone?: 'quick' | 'voice'): Promise<NoteMetadata[]> {
+    // Check if index is stale and rebuild if needed
+    if (await this.indexManager.isStale()) {
+      console.error('[index] Rebuilding stale index...');
+      await this.indexManager.rebuild();
+    }
+
+    const metadata = await this.indexManager.query({ zones: ['inbox'] });
+
+    let filtered = metadata;
+
+    // Filter by subzone if specified
+    if (subzone) {
+      const subzonePath = subzone === 'quick' ? 'inbox/quick' : 'inbox/voice';
+      filtered = metadata.filter(note => note.path.includes(subzonePath));
+    }
+
+    // Sort by created date (oldest first for processing)
+    filtered.sort((a, b) => a.created.getTime() - b.created.getTime());
+
+    return filtered;
   }
 
   /**
