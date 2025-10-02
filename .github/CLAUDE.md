@@ -97,6 +97,32 @@ When working on GitHub issues:
 4. **Update documentation** if user-facing behavior changes
 5. **Reference baseline measurements** in PR description
 
+### Creating New Issues
+
+When creating issues for future work, use this structure:
+- Clear description of what and why
+- Context and background
+- Specific requirements (checklist)
+- Implementation approach (technical guidance)
+- **Acceptance criteria including build/test verification** (see CRITICAL section below)
+- Notes for risks/considerations
+
+Reference example templates in [.github-issues/](.github-issues/) for complex features.
+
+## CRITICAL: Before Creating Any PR
+
+**You MUST verify these steps before creating a pull request:**
+
+1. ✅ **Build succeeds**: Run `npm run build` - MUST complete with zero errors
+2. ✅ **Tests pass**: Run `npm test` - ALL tests MUST pass
+3. ✅ **Test coverage maintained**: Overall test coverage is not reduced
+4. ✅ **New code has tests**: Substantive new code/components have new or updated unit tests
+5. ✅ **Include evidence**: Add build/test output to PR description or final issue comment
+
+**If build fails or tests fail, you MUST fix the issues before creating the PR.** Never create a PR with failing tests or compilation errors.
+
+This is non-negotiable - broken PRs waste review time and create technical debt.
+
 ## Code Style
 
 - Use TypeScript strict mode (already configured)

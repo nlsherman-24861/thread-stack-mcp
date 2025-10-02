@@ -119,6 +119,11 @@ async search(
 - [ ] Early abort works correctly
 - [ ] Results are correct (same as batch search)
 - [ ] MCP protocol supports streaming (or fallback to batch)
+- [ ] **`npm run build` completes with zero errors**
+- [ ] **`npm test` passes - ALL tests must pass**
+- [ ] **Test coverage is not reduced - verify with `npm test -- --coverage`**
+- [ ] **New code has unit tests - substantive components have test coverage**
+- [ ] **Build/test output included in PR description or final comment**
 
 ### Dependencies
 

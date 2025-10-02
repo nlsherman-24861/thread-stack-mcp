@@ -105,7 +105,11 @@ async search(options: ZoneSearchOptions): Promise<SearchResult[]> {
 - [ ] `scanZonesMetadata()` method implemented and tested
 - [ ] Tag operations use metadata-only scan
 - [ ] Text search uses two-pass approach (metadata filter → content load)
-- [ ] All existing tests still pass
+- [ ] **`npm run build` completes with zero errors**
+- [ ] **`npm test` passes - ALL tests must pass**
+- [ ] **Test coverage is not reduced - verify with `npm test -- --coverage`**
+- [ ] **New code has unit tests - substantive components have test coverage**
+- [ ] **Build/test output included in PR description or final comment**
 - [ ] Benchmark shows ≥3x speedup for tag operations
 - [ ] Memory usage reduced (verify via benchmark profiling)
 

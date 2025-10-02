@@ -148,6 +148,11 @@ async scanZonesMetadata(zones: Zone[]): Promise<NoteMetadata[]> {
 - [ ] Write operations update index incrementally
 - [ ] Metadata queries use index when available
 - [ ] Fallback to file scan if index unavailable/corrupt
+- [ ] **`npm run build` completes with zero errors**
+- [ ] **`npm test` passes - ALL tests must pass**
+- [ ] **Test coverage is not reduced - verify with `npm test -- --coverage`**
+- [ ] **New code has unit tests - substantive components have test coverage**
+- [ ] **Build/test output included in PR description or final comment**
 - [ ] Benchmark shows <5ms for tag operations on 1000-note corpus
 - [ ] Index size is reasonable (<1MB for 1000 notes)
 

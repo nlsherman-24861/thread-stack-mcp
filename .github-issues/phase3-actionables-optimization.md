@@ -128,12 +128,22 @@ async extractActionables(zones?: Zone[]): Promise<ActionableItem[]> {
 - [ ] Actionable extraction skips notes without flag
 - [ ] Benchmark shows ≥3x speedup
 - [ ] All existing actionable tests pass
+- [ ] **`npm run build` completes with zero errors**
+- [ ] **`npm test` passes - ALL tests must pass**
+- [ ] **Test coverage is not reduced - verify with `npm test -- --coverage`**
+- [ ] **New code has unit tests - substantive components have test coverage**
+- [ ] **Build/test output included in PR description or final comment**
 
 **Phase 3b (optional):**
 - [ ] Index stores pre-extracted actionables
 - [ ] Query returns actionables without file I/O
 - [ ] Index invalidation updates actionables
 - [ ] Benchmark shows ≥10x speedup
+- [ ] **`npm run build` completes with zero errors**
+- [ ] **`npm test` passes - ALL tests must pass**
+- [ ] **Test coverage is not reduced - verify with `npm test -- --coverage`**
+- [ ] **New code has unit tests - substantive components have test coverage**
+- [ ] **Build/test output included in PR description or final comment**
 
 ### Dependencies
 
