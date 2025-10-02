@@ -35,36 +35,55 @@ export class ZoneScanner {
   }
 
   /**
-   * Scan files in specified zones
+   * Scan files in specified zones - parallelized version
    */
   async scanZones(zones: Zone[]): Promise<Note[]> {
+    // Create zone scanning promises for parallel execution
+    const zonePromises = zones.map(async (zone) => {
+      try {
+        return await this.scanSingleZone(zone);
+      } catch (error) {
+        console.error(`Failed to scan zone ${zone}:`, error);
+        return []; // Return empty array for failed zones to maintain partial results
+      }
+    });
+
+    // Wait for all zones to complete in parallel
+    const zoneResults = await Promise.all(zonePromises);
+
+    // Flatten and combine results from all zones
+    return zoneResults.flat();
+  }
+
+  /**
+   * Scan a single zone (extracted for parallel processing)
+   */
+  private async scanSingleZone(zone: Zone): Promise<Note[]> {
     const notes: Note[] = [];
 
-    for (const zone of zones) {
-      if (zone === 'scratchpad') {
-        // Scratchpad is a single file, handle separately
-        const scratchpadPath = this.zones.getZonePath('scratchpad');
-        try {
-          const note = await this.loadNote(scratchpadPath);
-          notes.push(note);
-        } catch {
-          // Scratchpad might not exist yet, skip
-        }
-      } else {
-        // Scan directory zones
-        const zonePaths = this.zones.getZonePaths([zone]);
+    if (zone === 'scratchpad') {
+      // Scratchpad is a single file, handle separately
+      const scratchpadPath = this.zones.getZonePath('scratchpad');
+      try {
+        const note = await this.loadNote(scratchpadPath);
+        notes.push(note);
+      } catch {
+        // Scratchpad might not exist yet, skip
+      }
+    } else {
+      // Scan directory zones
+      const zonePaths = this.zones.getZonePaths([zone]);
 
-        for (const zonePath of zonePaths) {
-          const pattern = `${zonePath}/**/*.md`;
-          const files = await glob(pattern, { windowsPathsNoEscape: true });
+      for (const zonePath of zonePaths) {
+        const pattern = `${zonePath}/**/*.md`;
+        const files = await glob(pattern, { windowsPathsNoEscape: true });
 
-          for (const file of files) {
-            try {
-              const note = await this.loadNote(file);
-              notes.push(note);
-            } catch (error) {
-              console.error(`Failed to load note ${file}:`, error);
-            }
+        for (const file of files) {
+          try {
+            const note = await this.loadNote(file);
+            notes.push(note);
+          } catch (error) {
+            console.error(`Failed to load note ${file}:`, error);
           }
         }
       }

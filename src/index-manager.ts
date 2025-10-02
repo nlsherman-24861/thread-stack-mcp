@@ -156,7 +156,7 @@ export class IndexManager {
   }
 
   /**
-   * Rebuild entire index from file system
+   * Rebuild entire index from file system - parallelized version
    */
   async rebuild(): Promise<void> {
     console.error('[index] Rebuilding metadata index...');
@@ -170,34 +170,27 @@ export class IndexManager {
 
     const allZones: Zone[] = ['scratchpad', 'inbox', 'notes', 'daily', 'maps'];
     
-    for (const zone of allZones) {
-      if (zone === 'scratchpad') {
-        // Handle scratchpad file
-        const scratchpadPath = this.zones.getZonePath('scratchpad');
-        try {
-          await this.addNoteToIndex(newIndex, scratchpadPath);
-        } catch {
-          // Scratchpad might not exist, skip
-        }
-      } else {
-        // Handle directory zones
-        const zonePaths = this.zones.getZonePaths([zone]);
+    // Create zone indexing promises for parallel execution
+    const zonePromises = allZones.map(async (zone) => {
+      try {
+        return await this.rebuildSingleZone(zone);
+      } catch (error) {
+        console.error(`[index] Failed to rebuild zone ${zone}:`, error);
+        return []; // Return empty array for failed zones
+      }
+    });
+
+    // Wait for all zones to complete in parallel
+    const zoneResults = await Promise.all(zonePromises);
+
+    // Add all notes to the index
+    for (const zoneNotes of zoneResults) {
+      for (const noteEntry of zoneNotes) {
+        newIndex.notes.push(noteEntry);
         
-        for (const zonePath of zonePaths) {
-          const pattern = `${zonePath}/**/*.md`;
-          try {
-            const files = await glob(pattern, { windowsPathsNoEscape: true });
-            
-            for (const file of files) {
-              try {
-                await this.addNoteToIndex(newIndex, file);
-              } catch (error) {
-                console.error(`[index] Failed to index ${file}:`, error);
-              }
-            }
-          } catch {
-            // Zone directory doesn't exist, skip
-          }
+        // Update tag counts
+        for (const tag of noteEntry.tags) {
+          newIndex.tags[tag] = (newIndex.tags[tag] || 0) + 1;
         }
       }
     }
@@ -206,6 +199,74 @@ export class IndexManager {
     await this.save();
     
     console.error(`[index] Rebuilt index with ${newIndex.notes.length} notes`);
+  }
+
+  /**
+   * Rebuild a single zone (extracted for parallel processing)
+   */
+  private async rebuildSingleZone(zone: Zone): Promise<Array<NoteMetadata & { mtime: number }>> {
+    const notes: Array<NoteMetadata & { mtime: number }> = [];
+
+    if (zone === 'scratchpad') {
+      // Handle scratchpad file
+      const scratchpadPath = this.zones.getZonePath('scratchpad');
+      try {
+        const noteEntry = await this.createNoteIndexEntry(scratchpadPath);
+        notes.push(noteEntry);
+      } catch {
+        // Scratchpad might not exist, skip
+      }
+    } else {
+      // Handle directory zones
+      const zonePaths = this.zones.getZonePaths([zone]);
+      
+      for (const zonePath of zonePaths) {
+        const pattern = `${zonePath}/**/*.md`;
+        try {
+          const files = await glob(pattern, { windowsPathsNoEscape: true });
+          
+          for (const file of files) {
+            try {
+              const noteEntry = await this.createNoteIndexEntry(file);
+              notes.push(noteEntry);
+            } catch (error) {
+              console.error(`[index] Failed to index ${file}:`, error);
+            }
+          }
+        } catch {
+          // Zone directory doesn't exist, skip
+        }
+      }
+    }
+
+    return notes;
+  }
+
+  /**
+   * Create index entry for a note (extracted from addNoteToIndex for parallel processing)
+   */
+  private async createNoteIndexEntry(filePath: string): Promise<NoteMetadata & { mtime: number }> {
+    // Read file
+    const content = await readFile(filePath, 'utf-8');
+    const fileStats = await stat(filePath);
+
+    // Parse note
+    const relativePath = this.zones.getRelativePath(filePath);
+    const note = this.parser.parse(
+      relativePath,
+      content,
+      {
+        created: fileStats.birthtime,
+        modified: fileStats.mtime
+      }
+    );
+
+    // Convert to metadata with mtime
+    const metadata = this.parser.toMetadata(note);
+    return {
+      ...metadata,
+      mtime: fileStats.mtimeMs
+    };
   }
 
   /**

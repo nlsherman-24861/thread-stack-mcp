@@ -244,6 +244,81 @@ describe('Performance Benchmarks', () => {
     expect(improvement).toBeGreaterThanOrEqual(2.5);
   }, 30000);
 
+  test('benchmark: parallel vs sequential zone search', async () => {
+    scanner.clearCache();
+
+    // Simulate sequential behavior (original implementation)
+    const scanZonesSequential = async (zones: any[]) => {
+      const notes: any[] = [];
+      for (const zone of zones) {
+        if (zone === 'scratchpad') {
+          const scratchpadPath = scanner.getZoneManager().getZonePath('scratchpad');
+          try {
+            const note = await scanner.loadNote(scratchpadPath);
+            notes.push(note);
+          } catch {
+            // Skip
+          }
+        } else {
+          const zonePaths = scanner.getZoneManager().getZonePaths([zone]);
+          for (const zonePath of zonePaths) {
+            const pattern = `${zonePath}/**/*.md`;
+            try {
+              const { glob } = await import('glob');
+              const files = await glob(pattern, { windowsPathsNoEscape: true });
+              for (const file of files) {
+                try {
+                  const note = await scanner.loadNote(file);
+                  notes.push(note);
+                } catch (error) {
+                  console.error(`Failed to load note ${file}:`, error);
+                }
+              }
+            } catch {
+              // Skip
+            }
+          }
+        }
+      }
+      return notes;
+    };
+
+    const testZones: any[] = ['notes', 'daily', 'inbox'];
+
+    // Benchmark sequential approach (simulated original behavior)
+    const sequentialStart = Date.now();
+    const sequentialResults = await scanZonesSequential(testZones);
+    const sequentialTime = Date.now() - sequentialStart;
+    
+    scanner.clearCache();
+
+    // Benchmark parallel approach (new implementation)
+    const parallelStart = Date.now();
+    const parallelResults = await scanner.scanZones(testZones as any);
+    const parallelTime = Date.now() - parallelStart;
+
+    const speedup = sequentialTime / parallelTime;
+
+    console.log(`Zone scanning comparison:
+      Sequential: ${sequentialTime}ms (${sequentialResults.length} notes)
+      Parallel: ${parallelTime}ms (${parallelResults.length} notes)
+      Speedup: ${speedup.toFixed(2)}x faster`);
+
+    perf.record('parallel-zone-search-comparison', parallelTime, {
+      sequentialTime,
+      parallelTime,
+      speedup,
+      noteCount: parallelResults.length,
+      zoneCount: testZones.length
+    });
+
+    // Verify we get the same results
+    expect(parallelResults.length).toBe(sequentialResults.length);
+    
+    // Target: ≥1.5x speedup for multi-zone searches (Issue #19 goal)
+    expect(speedup).toBeGreaterThanOrEqual(1.5);
+  }, 30000);
+
   test('benchmark: findRelated', async () => {
     scanner.clearCache();
 
