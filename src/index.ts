@@ -728,13 +728,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // === ACTIONABLES ===
       case 'get_actionable_items': {
         const zones = (args.zones as Zone[]) || scanner.getZoneManager().getDefaultSearchZones();
-        const allNotes = await scanner.scanZones(zones);
-        let actionables: ActionableItem[] = [];
-
-        for (const note of allNotes) {
-          const noteActionables = parser.extractActionables(note);
-          actionables.push(...noteActionables);
-        }
+        let actionables = await scanner.extractActionablesOptimized(zones);
 
         if (args.status && args.status !== 'all') {
           actionables = actionables.filter(a => a.status === (args.status as string));

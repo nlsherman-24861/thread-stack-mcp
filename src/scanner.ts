@@ -8,7 +8,7 @@ import { readFile, stat } from 'fs/promises';
 import { relative } from 'path';
 import matter from 'gray-matter';
 import { NoteParser } from './parser.js';
-import { Note, NoteMetadata, SearchResult } from './types.js';
+import { Note, NoteMetadata, SearchResult, ActionableItem } from './types.js';
 import { ZoneManager, Zone } from './zones.js';
 import { IndexManager } from './index-manager.js';
 
@@ -100,7 +100,9 @@ export class ZoneScanner {
     // Check for actionables in first part of content
     const contentSample = content.substring(0, 500);
     const hasActionables = contentSample.includes('#actionable') ||
-                          /^[\s-]*\[[ xX]\]/m.test(contentSample) ||
+                          contentSample.includes('- [ ]') ||
+                          contentSample.includes('- [x]') ||
+                          contentSample.includes('- [X]') ||
                           tags.includes('actionable');
     
     // Extract issue references from first part
@@ -523,6 +525,35 @@ export class ZoneScanner {
     filtered.sort((a, b) => a.created.getTime() - b.created.getTime());
 
     return filtered;
+  }
+
+  /**
+   * Extract actionables from zones using metadata filtering (Phase 3a optimization)
+   */
+  async extractActionablesOptimized(zones: Zone[]): Promise<ActionableItem[]> {
+    // PHASE 1: Get metadata from index to filter notes with actionables
+    const metadata = await this.scanZonesMetadata(zones);
+    
+    // PHASE 2: Filter to only notes that have actionables flag
+    const candidates = metadata.filter(m => m.hasActionables);
+    
+    // PHASE 3: Load full content only for candidate notes
+    const basePath = this.zones.getBasePath();
+    const notes = await Promise.all(
+      candidates.map(async (m) => {
+        const fullPath = `${basePath}/${m.path}`;
+        return await this.loadNote(fullPath);
+      })
+    );
+
+    // PHASE 4: Extract actionables from the filtered set
+    const actionables: ActionableItem[] = [];
+    for (const note of notes) {
+      const noteActionables = this.parser.extractActionables(note);
+      actionables.push(...noteActionables);
+    }
+
+    return actionables;
   }
 
   /**
