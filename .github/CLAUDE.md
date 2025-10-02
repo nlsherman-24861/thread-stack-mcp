@@ -109,6 +109,17 @@ When creating issues for future work, use this structure:
 
 Reference example templates in [.github-issues/](.github-issues/) for complex features.
 
+## Dependency Management
+
+**Lockfile Policy**: This project uses `package-lock.json` to ensure consistent dependency versions across environments.
+
+- **Always commit `package-lock.json`** when you run `npm install` or modify dependencies
+- If `package-lock.json` is missing, generate it with `npm install` and commit it
+- Use `npm ci` in CI environments (already configured in workflows)
+- The CI workflow will gracefully handle missing lockfiles but performance is better with them
+
+This ensures reproducible builds and enables npm caching in GitHub Actions.
+
 ## CRITICAL: Before Creating Any PR
 
 **You MUST verify these steps before creating a pull request:**
@@ -117,7 +128,8 @@ Reference example templates in [.github-issues/](.github-issues/) for complex fe
 2. ✅ **Tests pass**: Run `npm test` - ALL tests MUST pass
 3. ✅ **Test coverage maintained**: Overall test coverage is not reduced
 4. ✅ **New code has tests**: Substantive new code/components have new or updated unit tests
-5. ✅ **Include evidence**: Add build/test output to PR description or final issue comment
+5. ✅ **Lockfile is up to date**: If you modified dependencies, ensure `package-lock.json` is committed
+6. ✅ **Include evidence**: Add build/test output to PR description or final issue comment
 
 **If build fails or tests fail, you MUST fix the issues before creating the PR.** Never create a PR with failing tests or compilation errors.
 

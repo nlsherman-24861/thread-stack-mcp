@@ -35,45 +35,6 @@ export class ZoneScanner {
   }
 
   /**
-   * Scan zones and return metadata only (no full content)
-   */
-  async scanZonesMetadata(zones: Zone[]): Promise<NoteMetadata[]> {
-    const metadata: NoteMetadata[] = [];
-
-    for (const zone of zones) {
-      if (zone === 'scratchpad') {
-        // Scratchpad is a single file, handle separately
-        const scratchpadPath = this.zones.getZonePath('scratchpad');
-        try {
-          const noteMetadata = await this.loadNoteMetadata(scratchpadPath);
-          metadata.push(noteMetadata);
-        } catch {
-          // Scratchpad might not exist yet, skip
-        }
-      } else {
-        // Scan directory zones
-        const zonePaths = this.zones.getZonePaths([zone]);
-
-        for (const zonePath of zonePaths) {
-          const pattern = `${zonePath}/**/*.md`;
-          const files = await glob(pattern, { windowsPathsNoEscape: true });
-
-          for (const file of files) {
-            try {
-              const noteMetadata = await this.loadNoteMetadata(file);
-              metadata.push(noteMetadata);
-            } catch (error) {
-              console.error(`Failed to load note metadata ${file}:`, error);
-            }
-          }
-        }
-      }
-    }
-
-    return metadata;
-  }
-
-  /**
    * Scan files in specified zones
    */
   async scanZones(zones: Zone[]): Promise<Note[]> {
