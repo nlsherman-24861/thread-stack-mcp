@@ -4,6 +4,8 @@
 
 import { writeFile, mkdir, rm } from 'fs/promises';
 import { join } from 'path';
+import { tmpdir } from 'os';
+import { randomBytes } from 'crypto';
 
 export interface FixtureConfig {
   basePath: string;
@@ -203,3 +205,70 @@ export const FIXTURE_CONFIGS = {
     actionableDensity: 0.15
   }
 };
+
+/**
+ * Create a temporary test directory
+ */
+export async function setupTestFixtures(): Promise<string> {
+  const testId = randomBytes(8).toString('hex');
+  const testDir = join(tmpdir(), `thread-stack-test-${testId}`);
+  
+  // Create directory structure
+  await mkdir(join(testDir, 'notes'), { recursive: true });
+  await mkdir(join(testDir, 'inbox', 'quick'), { recursive: true });
+  await mkdir(join(testDir, 'inbox', 'voice'), { recursive: true });
+  await mkdir(join(testDir, 'daily'), { recursive: true });
+  
+  // Create empty scratchpad
+  await writeFile(join(testDir, 'scratchpad.md'), '# Scratchpad\n\n', 'utf-8');
+  
+  return testDir;
+}
+
+/**
+ * Clean up test directory
+ */
+export async function cleanupTestFixtures(testDir: string): Promise<void> {
+  await rm(testDir, { recursive: true, force: true });
+}
+
+/**
+ * Create a test note with specified content
+ */
+export async function createTestNote(
+  basePath: string,
+  relativePath: string,
+  options: {
+    title: string;
+    content: string;
+    tags?: string[];
+    frontmatter?: Record<string, any>;
+  }
+): Promise<void> {
+  const fullPath = join(basePath, relativePath);
+  const dir = join(fullPath, '..');
+  await mkdir(dir, { recursive: true });
+  
+  const tags = options.tags || [];
+  const frontmatter = options.frontmatter || {};
+  
+  // Build frontmatter
+  const fm = {
+    title: options.title,
+    tags,
+    created: new Date().toISOString(),
+    ...frontmatter
+  };
+  
+  const frontmatterStr = `---\n${Object.entries(fm)
+    .map(([key, value]) => {
+      if (Array.isArray(value)) {
+        return `${key}: [${value.join(', ')}]`;
+      }
+      return `${key}: ${value}`;
+    })
+    .join('\n')}\n---`;
+  
+  const content = `${frontmatterStr}\n\n# ${options.title}\n\n${options.content}`;
+  await writeFile(fullPath, content, 'utf-8');
+}

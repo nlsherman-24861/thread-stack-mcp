@@ -14,7 +14,7 @@ import {
   Tool
 } from '@modelcontextprotocol/sdk/types.js';
 
-import { ZoneScanner } from './scanner.js';
+import { ZoneScanner, StreamingSearchOptions, StreamingSearchBatch } from './scanner.js';
 import { NoteParser } from './parser.js';
 import { ContentWriter } from './writer.js';
 import { GitIntegration } from './git.js';
@@ -283,6 +283,48 @@ const tools: Tool[] = [
     }
   },
   {
+    name: 'search_knowledge_streaming',
+    description: 'Stream search results as they are found. Returns batches with progress for faster perceived performance.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query'
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Filter by tags'
+        },
+        zones: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: ['scratchpad', 'inbox', 'notes', 'daily', 'maps', 'archive']
+          },
+          description: 'Zones to search (default: notes, daily)'
+        },
+        date_from: {
+          type: 'string',
+          description: 'Start date (ISO format)'
+        },
+        date_to: {
+          type: 'string',
+          description: 'End date (ISO format)'
+        },
+        limit: {
+          type: 'number',
+          description: 'Max results (default: 20)'
+        },
+        batch_size: {
+          type: 'number',
+          description: 'Results per batch (default: 10)'
+        }
+      }
+    }
+  },
+  {
     name: 'get_content',
     description: 'Read any file by path. Zone-agnostic.',
     inputSchema: {
@@ -411,7 +453,7 @@ const tools: Tool[] = [
   }
 ];
 
-// Create server
+// Create server with progress capabilities
 const server = new Server(
   {
     name: 'thread-stack-mcp',
@@ -419,7 +461,10 @@ const server = new Server(
   },
   {
     capabilities: {
-      tools: {}
+      tools: {},
+      experimental: {
+        streaming: true  // Indicate we support streaming-like behavior
+      }
     }
   }
 );
@@ -676,6 +721,77 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }, null, 2)
           }]
         };
+      }
+
+      case 'search_knowledge_streaming': {
+        const zones = args.zones as Zone[] | undefined;
+        const streamingOptions: StreamingSearchOptions = {
+          query: args.query as string | undefined,
+          tags: args.tags as string[] | undefined,
+          zones,
+          dateFrom: args.date_from ? new Date(args.date_from as string) : undefined,
+          dateTo: args.date_to ? new Date(args.date_to as string) : undefined,
+          limit: (args.limit as number) || 20,
+          batchSize: (args.batch_size as number) || 10
+        };
+
+        // Collect all batches and return as multiple content items
+        const batches: StreamingSearchBatch[] = [];
+        const startTime = Date.now();
+        
+        for await (const batch of scanner.searchStreaming(streamingOptions)) {
+          batches.push(batch);
+          
+          // Early exit if we have enough results or hit limit
+          if (streamingOptions.limit && batch.totalFound >= streamingOptions.limit) {
+            break;
+          }
+        }
+
+        const endTime = Date.now();
+        const totalTime = endTime - startTime;
+        
+        // Create response with multiple content items (one per batch + summary)
+        const content = [];
+        
+        // Add each batch as a separate content item
+        for (const batch of batches) {
+          content.push({
+            type: 'text' as const,
+            text: JSON.stringify({
+              type: 'batch',
+              batch: batch.batch,
+              has_more: batch.hasMore,
+              total_found: batch.totalFound,
+              total_processed: batch.totalProcessed,
+              results: batch.results.map(r => ({
+                path: r.note.path,
+                title: r.note.title,
+                excerpt: r.excerpt,
+                tags: r.note.tags,
+                created: r.note.created,
+                modified: r.note.modified,
+                score: r.score
+              }))
+            }, null, 2)
+          });
+        }
+        
+        // Add summary as final content item
+        const allResults = batches.flatMap(b => b.results);
+        content.push({
+          type: 'text' as const,
+          text: JSON.stringify({
+            type: 'summary',
+            total_batches: batches.length,
+            total_results: allResults.length,
+            time_ms: totalTime,
+            time_to_first_result_ms: batches.length > 0 ? 'varies' : totalTime,
+            streaming_enabled: true
+          }, null, 2)
+        });
+
+        return { content };
       }
 
       case 'get_content': {

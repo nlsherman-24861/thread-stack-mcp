@@ -21,6 +21,19 @@ export interface ZoneSearchOptions {
   limit?: number;
 }
 
+export interface StreamingSearchOptions extends ZoneSearchOptions {
+  batchSize?: number;  // Results per batch (default: 10)
+  progressCallback?: (progress: number, total: number, results: SearchResult[]) => void;
+}
+
+export interface StreamingSearchBatch {
+  batch: number;
+  results: SearchResult[];
+  hasMore: boolean;
+  totalFound: number;
+  totalProcessed: number;
+}
+
 export class ZoneScanner {
   private zones: ZoneManager;
   private parser: NoteParser;
@@ -279,6 +292,200 @@ export class ZoneScanner {
     }
 
     return results;
+  }
+
+  /**
+   * Stream search results as they're found using generator pattern
+   * Provides faster time-to-first-result for large searches
+   */
+  async *searchStreaming(options: StreamingSearchOptions): AsyncGenerator<StreamingSearchBatch> {
+    // Determine which zones to search
+    const zonesToSearch = options.zones || this.zones.getDefaultSearchZones();
+    const batchSize = options.batchSize || 10;
+    let batch = 1;
+    let totalProcessed = 0;
+    let totalFound = 0;
+    const allResults: SearchResult[] = [];
+
+    // PHASE 1: Scan metadata only for initial filtering
+    const allMetadata = await this.scanZonesMetadata(zonesToSearch);
+    let filteredMetadata = allMetadata;
+
+    // Filter by date range (can be done with metadata only)
+    if (options.dateFrom) {
+      filteredMetadata = filteredMetadata.filter(note => note.created >= options.dateFrom!);
+    }
+    if (options.dateTo) {
+      filteredMetadata = filteredMetadata.filter(note => note.created <= options.dateTo!);
+    }
+
+    // Filter by tags (can be done with metadata only)
+    if (options.tags && options.tags.length > 0) {
+      filteredMetadata = filteredMetadata.filter(note => 
+        options.tags!.every(tag => note.tags.includes(tag))
+      );
+    }
+
+    // If no query, we can batch metadata directly
+    if (!options.query) {
+      for (let i = 0; i < filteredMetadata.length; i += batchSize) {
+        const metadataBatch = filteredMetadata.slice(i, i + batchSize);
+        const batchResults: SearchResult[] = [];
+
+        for (const metadata of metadataBatch) {
+          let score = 0;
+          const matchedTags: string[] = [];
+
+          // Add tag scoring
+          if (options.tags && options.tags.length > 0) {
+            matchedTags.push(...options.tags.filter(tag => metadata.tags.includes(tag)));
+            score += matchedTags.length * 10;
+          }
+
+          batchResults.push({
+            note: metadata,
+            excerpt: '', // No excerpt needed for tag-only searches
+            score,
+            matchedTags
+          });
+        }
+
+        totalProcessed += metadataBatch.length;
+        totalFound += batchResults.length;
+        allResults.push(...batchResults);
+
+        // Send progress callback if provided
+        if (options.progressCallback) {
+          options.progressCallback(totalProcessed, filteredMetadata.length, batchResults);
+        }
+
+        yield {
+          batch: batch++,
+          results: batchResults,
+          hasMore: i + batchSize < filteredMetadata.length,
+          totalFound,
+          totalProcessed
+        };
+
+        // Early exit if limit reached
+        if (options.limit && totalFound >= options.limit) {
+          break;
+        }
+      }
+      return;
+    }
+
+    // PHASE 2: For query searches, load content in batches
+    const queryLower = options.query.toLowerCase();
+    
+    for (let i = 0; i < filteredMetadata.length; i += batchSize) {
+      const metadataBatch = filteredMetadata.slice(i, i + batchSize);
+      const batchResults: SearchResult[] = [];
+
+      // Load full content for this batch
+      const fullNotes = await Promise.all(
+        metadataBatch.map(async (metadata) => {
+          const basePath = this.zones.getBasePath();
+          const fullPath = `${basePath}/${metadata.path}`;
+          return await this.loadNote(fullPath);
+        })
+      );
+
+      // Process each note in the batch
+      for (const note of fullNotes) {
+        let score = 0;
+        const matchedTags: string[] = [];
+
+        // Add tag scoring
+        if (options.tags && options.tags.length > 0) {
+          matchedTags.push(...options.tags.filter(tag => note.tags.includes(tag)));
+          score += matchedTags.length * 10;
+        }
+
+        // Query matching
+        const titleMatch = note.title.toLowerCase().includes(queryLower);
+        const contentMatch = note.content.toLowerCase().includes(queryLower);
+
+        if (!titleMatch && !contentMatch) {
+          continue; // Skip notes without query match
+        }
+
+        // Score based on match location
+        if (titleMatch) {
+          score += 20;
+        }
+        if (contentMatch) {
+          score += 10;
+        }
+
+        // Boost score for exact matches
+        if (note.title.toLowerCase() === queryLower) {
+          score += 50;
+        }
+
+        // Generate excerpt with query context
+        const excerpt = this.generateContextualExcerpt(note.content, options.query);
+        const metadata = this.parser.toMetadata(note);
+
+        batchResults.push({
+          note: metadata,
+          excerpt,
+          score,
+          matchedTags
+        });
+      }
+
+      // Sort batch by score
+      batchResults.sort((a, b) => b.score - a.score);
+
+      totalProcessed += metadataBatch.length;
+      totalFound += batchResults.length;
+      allResults.push(...batchResults);
+
+      // Send progress callback if provided
+      if (options.progressCallback) {
+        options.progressCallback(totalProcessed, filteredMetadata.length, batchResults);
+      }
+
+      yield {
+        batch: batch++,
+        results: batchResults,
+        hasMore: i + batchSize < filteredMetadata.length,
+        totalFound,
+        totalProcessed
+      };
+
+      // Early exit if limit reached
+      if (options.limit && totalFound >= options.limit) {
+        break;
+      }
+    }
+  }
+
+  /**
+   * Search with streaming and collect all results
+   * Provides same interface as regular search but with streaming benefits
+   */
+  async searchStreamingCollected(options: StreamingSearchOptions): Promise<SearchResult[]> {
+    const allResults: SearchResult[] = [];
+    
+    for await (const batch of this.searchStreaming(options)) {
+      allResults.push(...batch.results);
+      
+      // Early exit if limit reached
+      if (options.limit && allResults.length >= options.limit) {
+        break;
+      }
+    }
+
+    // Sort all results by score and apply limit
+    allResults.sort((a, b) => b.score - a.score);
+    
+    if (options.limit) {
+      return allResults.slice(0, options.limit);
+    }
+
+    return allResults;
   }
 
   /**
