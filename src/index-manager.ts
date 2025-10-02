@@ -219,8 +219,21 @@ export class IndexManager {
       return;
     }
 
-    // Remove existing entry
-    this.index.notes = this.index.notes.filter(note => note.path !== notePath);
+    // Find and remove existing entry, decrementing tag counts
+    const existingNoteIndex = this.index.notes.findIndex(note => note.path === notePath);
+    if (existingNoteIndex !== -1) {
+      const existingNote = this.index.notes[existingNoteIndex];
+      // Decrement tag counts for the old note
+      for (const tag of existingNote.tags) {
+        if (this.index.tags[tag] > 1) {
+          this.index.tags[tag]--;
+        } else {
+          delete this.index.tags[tag];
+        }
+      }
+      // Remove the note from the index
+      this.index.notes.splice(existingNoteIndex, 1);
+    }
 
     // Add updated entry
     try {
