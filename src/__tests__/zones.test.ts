@@ -192,4 +192,46 @@ describe('ZoneManager', () => {
       expect(ZONE_CONFIGS.daily.searchByDefault).toBe(true);
     });
   });
+
+  describe('Parallel Zone Search Error Resilience', () => {
+    it('should handle partial zone failures gracefully', async () => {
+      const { tmpdir } = await import('os');
+      const { join } = await import('path');
+      const { rm, mkdir, writeFile } = await import('fs/promises');
+      const { ZoneScanner } = await import('../scanner.js');
+      const { NoteParser } = await import('../parser.js');
+
+      const testDir = join(tmpdir(), 'test-error-resilience');
+      
+      try {
+        // Create test structure
+        await mkdir(join(testDir, 'notes'), { recursive: true });
+        await mkdir(join(testDir, 'daily'), { recursive: true });
+        await writeFile(join(testDir, 'notes', 'test-note.md'), '# Test Note\nContent');
+        await writeFile(join(testDir, 'daily', 'test-daily.md'), '# Test Daily\nContent');
+
+        const scanner = new ZoneScanner(testDir, new NoteParser());
+
+        // Mock scanSingleZone to simulate failure in one zone
+        const originalScanSingleZone = (scanner as any).scanSingleZone;
+        (scanner as any).scanSingleZone = jest.fn().mockImplementation(async (zone: string) => {
+          if (zone === 'inbox') {
+            throw new Error('Simulated inbox failure');
+          }
+          return originalScanSingleZone.call(scanner, zone);
+        });
+
+        // Should still return results from successful zones
+        const results = await scanner.scanZones(['notes', 'daily', 'inbox']);
+        
+        expect(results.length).toBeGreaterThan(0);
+        expect(results.some(note => note.path.includes('notes'))).toBe(true);
+        expect(results.some(note => note.path.includes('daily'))).toBe(true);
+        expect(results.some(note => note.path.includes('inbox'))).toBe(false);
+
+      } finally {
+        await rm(testDir, { recursive: true, force: true });
+      }
+    });
+  });
 });
