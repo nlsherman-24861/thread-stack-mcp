@@ -122,18 +122,34 @@ This ensures reproducible builds and enables npm caching in GitHub Actions.
 
 ## CRITICAL: Before Creating Any PR
 
-**You MUST verify these steps before creating a pull request:**
+**Pre-PR Verification - RUN IN THIS ORDER:**
 
-1. ✅ **Build succeeds**: Run `npm run build` - MUST complete with zero errors
-2. ✅ **Tests pass**: Run `npm test` - ALL tests MUST pass
-3. ✅ **Test coverage maintained**: Overall test coverage is not reduced
-4. ✅ **New code has tests**: Substantive new code/components have new or updated unit tests
-5. ✅ **Lockfile is up to date**: If you modified dependencies, ensure `package-lock.json` is committed
-6. ✅ **Include evidence**: Add build/test output to PR description or final issue comment
+```bash
+# Step 1: Clean build (MUST do first)
+rm -rf dist/
+npm run build
+# ↑ Must show "0 errors"
 
-**If build fails or tests fail, you MUST fix the issues before creating the PR.** Never create a PR with failing tests or compilation errors.
+# Step 2: Run tests (ONLY after clean build)
+npm test
+# ↑ Must show "X passed, 0 failed"
+```
 
-This is non-negotiable - broken PRs waste review time and create technical debt.
+**Copy into PR description:**
+
+```text
+- [ ] Clean build completed (0 errors)
+- [ ] All tests pass (0 failures - see summary below)
+- [ ] New code has tests
+- [ ] Lockfile updated if dependencies changed
+
+Test Results:
+[paste "Test Suites: X passed, X total" summary here]
+```
+
+**DO NOT CREATE PR if tests fail. Fix failures first.**
+
+**If local passes but CI fails**: Trust the CI - it runs clean builds. Investigate the failure, don't dismiss it as "environment differences".
 
 ## Code Style
 

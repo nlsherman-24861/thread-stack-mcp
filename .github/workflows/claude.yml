@@ -9,6 +9,12 @@ on:
     types: [opened, assigned, labeled]
   pull_request_review:
     types: [submitted]
+  workflow_dispatch:
+    inputs:
+      label_trigger_message:
+        description: 'Custom message when claude-task label is added'
+        required: false
+        default: '@claude Please help with this issue. Review the description and either:\n- Ask clarifying questions if needed\n- Propose an implementation plan\n- Start working on the implementation\n\nFollow the acceptance criteria and guidelines in the issue description.'
 
 jobs:
   claude:
@@ -104,11 +110,14 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const message = '${{ github.event.inputs.label_trigger_message }}' || 
+              '@claude Please help with this issue. Review the description and either:\n- Ask clarifying questions if needed\n- Propose an implementation plan\n- Start working on the implementation\n\nFollow the acceptance criteria and guidelines in the issue description.';
+            
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: '@claude This issue has been tagged for your assistance. Please review and help with the request.'
+              body: message
             });
 
       - name: Run Claude Code
@@ -128,10 +137,10 @@ jobs:
           
           # Optional: Trigger when specific user is assigned to an issue
           # assignee_trigger: "claude-bot"
-
-          # Allow Claude to run build and test commands
-          allowed_tools: "Bash(npm install),Bash(npm ci),Bash(npm run build),Bash(npm test),Bash(npm run test:*),Bash(npm run lint:*)"
-
+          
+          # Optional: Allow Claude to run specific commands
+          # allowed_tools: "Bash(npm install),Bash(npm run build),Bash(npm run test:*),Bash(npm run lint:*)"
+          
           # Optional: Add custom instructions for Claude to customize its behavior for your project
           # custom_instructions: |
           #   Follow our coding standards
