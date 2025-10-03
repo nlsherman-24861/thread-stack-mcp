@@ -1,0 +1,5 @@
+sync: true
+auto_update: true
+configurator: preferences-only
+auto_push: true
+create_pr: false
